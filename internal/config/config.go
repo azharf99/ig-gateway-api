@@ -40,21 +40,21 @@ func LoadConfig() {
 
 	AppConfig = &Config{
 		Port:           getEnv("PORT", "8080"),
-		AppURL:         getEnv("APP_URL", "http://localhost:8080"),
+		AppURL:         getEnv("APP_URL", "http://localhost:8090"),
 		DBHost:         getEnv("DB_HOST", "localhost"),
 		DBPort:         getEnv("DB_PORT", "5432"),
 		DBUser:         getEnv("DB_USER", "postgres"),
-		DBPassword:     getEnv("DB_PASSWORD", "postgres"),
+		DBPassword:     getEnv("DB_PASSWORD", ""),
 		DBName:         getEnv("DB_NAME", "ig_gateway"),
 		DBSSLMode:      getEnv("DB_SSLMODE", "disable"),
 		RedisHost:      getEnv("REDIS_HOST", "localhost"),
 		RedisPort:      getEnv("REDIS_PORT", "6379"),
 		RedisPassword:  getEnv("REDIS_PASSWORD", ""),
-		JWTSecret:      getEnv("JWT_SECRET", "super-secret-key-change-in-prod"),
+		JWTSecret:      getEnv("JWT_SECRET", ""),
 		JWTExpiryHours: expiryHours,
 		IGClientID:     getEnv("INSTAGRAM_CLIENT_ID", ""),
 		IGClientSecret: getEnv("INSTAGRAM_CLIENT_SECRET", ""),
-		IGRedirectURI:  getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8080/api/v1/auth/instagram/callback"),
+		IGRedirectURI:  getEnv("INSTAGRAM_REDIRECT_URI", "http://localhost:8090/auth/instagram/callback"),
 	}
 
 	log.Println("Configuration loaded successfully")
