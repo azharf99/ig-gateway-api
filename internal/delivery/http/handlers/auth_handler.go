@@ -94,12 +94,13 @@ func (h *AuthHandler) GetInstagramOAuthURL(c *gin.Context) {
 		"instagram_content_publish",
 		"pages_read_engagement",
 		"pages_show_list",
+		"business_management",
 	}
 
 	extras := `{"setup":{"channel":"IG_API_ONBOARDING"}}`
 
 	oauthURL := fmt.Sprintf(
-		"https://www.facebook.com/v18.0/dialog/oauth?client_id=%s&redirect_uri=%s&scope=%s&response_type=code&display=page&extras=%s",
+		"https://www.facebook.com/v25.0/dialog/oauth?client_id=%s&redirect_uri=%s&scope=%s&response_type=code&display=page&extras=%s",
 		clientID,
 		url.QueryEscape(redirectURI),
 		url.QueryEscape(stringsJoin(scopes, ",")),

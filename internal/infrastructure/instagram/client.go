@@ -36,7 +36,7 @@ type instagramClient struct {
 func NewInstagramClient() Client {
 	return &instagramClient{
 		httpClient: &http.Client{Timeout: 60 * time.Second},
-		graphURL:   "https://graph.facebook.com/v18.0",
+		graphURL:   "https://graph.facebook.com/v25.0",
 	}
 }
 
@@ -48,13 +48,14 @@ func (c *instagramClient) GetShortLivedToken(code string) (string, error) {
 	data.Set("redirect_uri", config.AppConfig.IGRedirectURI)
 	data.Set("code", code)
 
-	resp, err := c.httpClient.PostForm("https://graph.facebook.com/v18.0/oauth/access_token", data)
+	resp, err := c.httpClient.PostForm("https://graph.facebook.com/v25.0/oauth/access_token", data)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	log.Printf("[DEBUG] GetShortLivedToken Facebook Response Code: %d, Body: %s", resp.StatusCode, string(body))
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("oauth failed: %s", string(body))
 	}
@@ -81,6 +82,7 @@ func (c *instagramClient) GetLongLivedToken(shortLivedToken string) (string, err
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	log.Printf("[DEBUG] GetLongLivedToken Facebook Response Code: %d, Body: %s", resp.StatusCode, string(body))
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("failed to get long-lived token: %s", string(body))
 	}
@@ -97,8 +99,8 @@ func (c *instagramClient) GetLongLivedToken(shortLivedToken string) (string, err
 
 // GetInstagramAccountID fetches the Instagram Business/Creator account ID from the linked Facebook Pages
 func (c *instagramClient) GetInstagramAccountID(userAccessToken string) (string, error) {
-	// 1. Get Facebook Pages managed by user
-	u := fmt.Sprintf("%s/me/accounts?fields=instagram_business_account&access_token=%s", c.graphURL, userAccessToken)
+	// 1. Get Facebook Pages managed by user requesting name, id, and instagram_business_account
+	u := fmt.Sprintf("%s/me/accounts?fields=id,name,instagram_business_account&access_token=%s", c.graphURL, userAccessToken)
 	resp, err := c.httpClient.Get(u)
 	if err != nil {
 		return "", err
@@ -106,6 +108,7 @@ func (c *instagramClient) GetInstagramAccountID(userAccessToken string) (string,
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	log.Printf("[DEBUG] GetInstagramAccountID Facebook Response Code: %d, Body: %s", resp.StatusCode, string(body))
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("failed to get FB Pages: %s", string(body))
 	}
@@ -113,6 +116,7 @@ func (c *instagramClient) GetInstagramAccountID(userAccessToken string) (string,
 	var pageResponse struct {
 		Data []struct {
 			ID                       string `json:"id"`
+			Name                     string `json:"name"`
 			InstagramBusinessAccount struct {
 				ID string `json:"id"`
 			} `json:"instagram_business_account"`
@@ -125,6 +129,7 @@ func (c *instagramClient) GetInstagramAccountID(userAccessToken string) (string,
 
 	// Look for a page that has an Instagram Business/Creator Account linked
 	for _, page := range pageResponse.Data {
+		log.Printf("[DEBUG] Found FB Page: %s (%s), Linked IG Account ID: %s", page.Name, page.ID, page.InstagramBusinessAccount.ID)
 		if page.InstagramBusinessAccount.ID != "" {
 			return page.InstagramBusinessAccount.ID, nil
 		}
