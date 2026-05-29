@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/azharf99/ig-gateway-api/internal/domain/entities"
 	"github.com/azharf99/ig-gateway-api/internal/infrastructure/storage"
 	"github.com/azharf99/ig-gateway-api/internal/usecase/post"
+	"github.com/azharf99/ig-gateway-api/pkg/media"
 	"github.com/gin-gonic/gin"
 )
 
@@ -116,17 +118,66 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		})
 	}
 
+	// Parse edit_metadata
+	editMetadataStr := c.PostForm("edit_metadata")
+	var editMetadata []media.EditMetadata
+	if editMetadataStr != "" {
+		if err := json.Unmarshal([]byte(editMetadataStr), &editMetadata); err != nil {
+			h.cleanupMediaList(mediaList)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid edit_metadata JSON format"})
+			return
+		}
+	}
+
+	// Parse audio and logo files
+	var audioPath string
+	var logoPath string
+
+	audioHeader, err := c.FormFile("audio_file")
+	if err == nil && audioHeader != nil {
+		savedAudio, err := h.storageServ.SaveFile(audioHeader)
+		if err != nil {
+			h.cleanupMediaList(mediaList)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to save audio file: %v", err)})
+			return
+		}
+		audioPath = savedAudio
+	}
+
+	logoHeader, err := c.FormFile("logo_file")
+	if err == nil && logoHeader != nil {
+		savedLogo, err := h.storageServ.SaveFile(logoHeader)
+		if err != nil {
+			h.cleanupMediaList(mediaList)
+			if audioPath != "" {
+				_ = h.storageServ.DeleteFile(audioPath)
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to save logo file: %v", err)})
+			return
+		}
+		logoPath = savedLogo
+	}
+
 	input := post.CreatePostInput{
-		UserID:      userID,
-		Caption:     caption,
-		PostType:    postType,
-		ScheduledAt: scheduledAt,
-		MediaFiles:  mediaList,
+		UserID:       userID,
+		Caption:      caption,
+		PostType:     postType,
+		ScheduledAt:  scheduledAt,
+		MediaFiles:   mediaList,
+		EditMetadata: editMetadata,
+		AudioPath:    audioPath,
+		LogoPath:     logoPath,
 	}
 
 	createdPost, err := h.postUsecase.CreatePost(c.Request.Context(), input)
 	if err != nil {
 		h.cleanupMediaList(mediaList)
+		if audioPath != "" {
+			_ = h.storageServ.DeleteFile(audioPath)
+		}
+		if logoPath != "" {
+			_ = h.storageServ.DeleteFile(logoPath)
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

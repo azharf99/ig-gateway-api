@@ -5,20 +5,27 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/azharf99/ig-gateway-api/internal/domain/entities"
 	"github.com/azharf99/ig-gateway-api/internal/domain/repositories"
 	"github.com/azharf99/ig-gateway-api/internal/infrastructure/instagram"
 	"github.com/azharf99/ig-gateway-api/internal/infrastructure/storage"
+	"github.com/azharf99/ig-gateway-api/pkg/media"
 )
 
 type CreatePostInput struct {
-	UserID      uint                `json:"-"`
-	Caption     string              `json:"caption"`
-	PostType    entities.PostType   `json:"post_type"` // "photo", "video", "carousel", "reels"
-	ScheduledAt *time.Time          `json:"scheduled_at"`
-	MediaFiles  []entities.PostMedia `json:"-"`
+	UserID       uint                 `json:"-"`
+	Caption      string               `json:"caption"`
+	PostType     entities.PostType    `json:"post_type"` // "photo", "video", "carousel", "reels"
+	ScheduledAt  *time.Time           `json:"scheduled_at"`
+	MediaFiles   []entities.PostMedia `json:"-"`
+	EditMetadata []media.EditMetadata `json:"-"`
+	AudioPath    string               `json:"-"`
+	LogoPath     string               `json:"-"`
 }
 
 type Usecase interface {
@@ -71,6 +78,46 @@ func (u *postUsecase) CreatePost(ctx context.Context, input CreatePostInput) (*e
 			return nil, errors.New("scheduled time must be in the future")
 		}
 		status = entities.PostStatusScheduled
+	}
+
+	// Clean up uploaded audio/logo files at the end of the usecase
+	if input.AudioPath != "" {
+		defer os.Remove(input.AudioPath)
+	}
+	if input.LogoPath != "" {
+		defer os.Remove(input.LogoPath)
+	}
+
+	// Process videos if edit metadata is provided
+	for i := range input.MediaFiles {
+		if input.MediaFiles[i].MediaType == "video" && i < len(input.EditMetadata) {
+			meta := input.EditMetadata[i]
+			// Check if we actually need to edit the video
+			if meta.Text != "" || meta.HasLogo || meta.HasAudio || meta.MuteAudio {
+				origRelativePath := input.MediaFiles[i].MediaURL
+
+				// Generate unique output filename
+				ext := filepath.Ext(origRelativePath)
+				base := strings.TrimSuffix(filepath.Base(origRelativePath), ext)
+				procFilename := fmt.Sprintf("%s-proc%s", base, ext)
+				processedRelativePath := filepath.Join(filepath.Dir(origRelativePath), procFilename)
+
+				log.Printf("[VideoProcessor] Processing video %s -> %s\n", origRelativePath, processedRelativePath)
+
+				// Run FFmpeg processing
+				err := media.ProcessVideo(ctx, origRelativePath, input.AudioPath, input.LogoPath, meta, processedRelativePath)
+				if err != nil {
+					log.Printf("[VideoProcessor] Error processing video: %v\n", err)
+					return nil, fmt.Errorf("failed to process video: %w", err)
+				}
+
+				// Delete original file since we now have the processed one
+				_ = os.Remove(origRelativePath)
+
+				// Update media model URL to use the processed path
+				input.MediaFiles[i].MediaURL = filepath.ToSlash(processedRelativePath)
+			}
+		}
 	}
 
 	post := &entities.Post{
