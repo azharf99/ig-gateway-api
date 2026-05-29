@@ -1,0 +1,24 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ig_api
+    restart: always
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - ./uploads:/app/uploads
+    networks:
+      - shared-network
+      - redis_network
+
+networks:
+  shared-network:
+    name: shared-network
+    external: true
+  redis_network:
+    name: redis_network
+    external: true
