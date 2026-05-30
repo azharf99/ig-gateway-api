@@ -223,6 +223,9 @@ func (h *PostHandler) GetPosts(c *gin.Context) {
 	for i := range posts {
 		for j := range posts[i].Media {
 			posts[i].Media[j].MediaURL = h.storageServ.GetPublicURL(posts[i].Media[j].MediaURL)
+			if posts[i].Media[j].ThumbnailURL != "" {
+				posts[i].Media[j].ThumbnailURL = h.storageServ.GetPublicURL(posts[i].Media[j].ThumbnailURL)
+			}
 		}
 	}
 
@@ -248,6 +251,9 @@ func (h *PostHandler) GetPostByID(c *gin.Context) {
 	// Add public URL mapping to media
 	for j := range p.Media {
 		p.Media[j].MediaURL = h.storageServ.GetPublicURL(p.Media[j].MediaURL)
+		if p.Media[j].ThumbnailURL != "" {
+			p.Media[j].ThumbnailURL = h.storageServ.GetPublicURL(p.Media[j].ThumbnailURL)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"post": p})

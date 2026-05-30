@@ -36,10 +36,11 @@ type Post struct {
 }
 
 type PostMedia struct {
-	ID        uint
-	PostID    uint
-	MediaURL  string // Local path where file is stored
-	Order     int
-	MediaType string // "image" or "video"
-	CreatedAt time.Time
+	ID           uint
+	PostID       uint
+	MediaURL     string // Local path where file is stored
+	ThumbnailURL string // Local path where thumbnail is stored (for videos)
+	Order        int
+	MediaType    string // "image" or "video"
+	CreatedAt    time.Time
 }

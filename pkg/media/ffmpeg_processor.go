@@ -307,3 +307,41 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath, subtitleP
 
 	return nil
 }
+
+func GenerateThumbnail(ctx context.Context, videoPath, outputPath string) error {
+	// Seek to 1s to avoid potential black frames at start of video.
+	// If the video is shorter than 1s, we will fallback to 0s.
+	args := []string{
+		"-y",
+		"-ss", "00:00:01",
+		"-i", videoPath,
+		"-vframes", "1",
+		"-q:v", "2",
+		outputPath,
+	}
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		// Fallback to start of the video (0s)
+		argsFallback := []string{
+			"-y",
+			"-i", videoPath,
+			"-vframes", "1",
+			"-q:v", "2",
+			outputPath,
+		}
+		cmdFallback := exec.CommandContext(ctx, "ffmpeg", argsFallback...)
+		var stderrFallback bytes.Buffer
+		cmdFallback.Stderr = &stderrFallback
+		if errFallback := cmdFallback.Run(); errFallback != nil {
+			return fmt.Errorf("ffmpeg thumbnail extraction failed: %w, stderr: %s", errFallback, stderrFallback.String())
+		}
+	}
+
+	return nil
+}
+

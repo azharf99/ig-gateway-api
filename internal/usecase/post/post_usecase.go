@@ -124,6 +124,23 @@ func (u *postUsecase) CreatePost(ctx context.Context, input CreatePostInput) (*e
 		}
 	}
 
+	// Generate thumbnails for all video files
+	for i := range input.MediaFiles {
+		if input.MediaFiles[i].MediaType == "video" {
+			videoPath := input.MediaFiles[i].MediaURL
+			ext := filepath.Ext(videoPath)
+			thumbPath := strings.TrimSuffix(videoPath, ext) + "-thumb.jpg"
+
+			log.Printf("[VideoProcessor] Generating thumbnail for video %s -> %s\n", videoPath, thumbPath)
+			err := media.GenerateThumbnail(ctx, videoPath, thumbPath)
+			if err != nil {
+				log.Printf("[VideoProcessor] Error generating thumbnail: %v\n", err)
+			} else {
+				input.MediaFiles[i].ThumbnailURL = filepath.ToSlash(thumbPath)
+			}
+		}
+	}
+
 	post := &entities.Post{
 		UserID:      input.UserID,
 		Caption:     input.Caption,
@@ -172,11 +189,13 @@ func (u *postUsecase) DeletePost(ctx context.Context, postID uint, userID uint) 
 		return errors.New("post not found")
 	}
 
-	// If already published, we don't delete files as they were uploaded to IG
-	// But if it's scheduled/draft/failed, we can clean up local files
-	if post.Status != entities.PostStatusPublished {
-		for _, m := range post.Media {
+	// Clean up all local media and thumbnail files
+	for _, m := range post.Media {
+		if m.MediaURL != "" {
 			_ = u.storageServ.DeleteFile(m.MediaURL)
+		}
+		if m.ThumbnailURL != "" {
+			_ = u.storageServ.DeleteFile(m.ThumbnailURL)
 		}
 	}
 

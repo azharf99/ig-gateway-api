@@ -21,12 +21,13 @@ type Post struct {
 }
 
 type PostMedia struct {
-	ID        uint      `gorm:"primaryKey"`
-	PostID    uint      `gorm:"not null;index"`
-	MediaURL  string    `gorm:"type:text;not null"`
-	Order     int       `gorm:"not null"`
-	MediaType string    `gorm:"size:50;not null"` // "image" or "video"
-	CreatedAt time.Time
+	ID           uint      `gorm:"primaryKey"`
+	PostID       uint      `gorm:"not null;index"`
+	MediaURL     string    `gorm:"type:text;not null"`
+	ThumbnailURL string    `gorm:"type:text"`
+	Order        int       `gorm:"not null"`
+	MediaType    string    `gorm:"size:50;not null"` // "image" or "video"
+	CreatedAt    time.Time
 }
 
 // ToEntity converts GORM Post to Domain Post Entity
@@ -34,12 +35,13 @@ func (p *Post) ToEntity() *entities.Post {
 	mediaEntities := make([]entities.PostMedia, len(p.Media))
 	for i, m := range p.Media {
 		mediaEntities[i] = entities.PostMedia{
-			ID:        m.ID,
-			PostID:    m.PostID,
-			MediaURL:  m.MediaURL,
-			Order:     m.Order,
-			MediaType: m.MediaType,
-			CreatedAt: m.CreatedAt,
+			ID:           m.ID,
+			PostID:       m.PostID,
+			MediaURL:     m.MediaURL,
+			ThumbnailURL: m.ThumbnailURL,
+			Order:        m.Order,
+			MediaType:    m.MediaType,
+			CreatedAt:    m.CreatedAt,
 		}
 	}
 
@@ -74,12 +76,13 @@ func (p *Post) FromEntity(e *entities.Post) {
 	p.Media = make([]PostMedia, len(e.Media))
 	for i, m := range e.Media {
 		p.Media[i] = PostMedia{
-			ID:        m.ID,
-			PostID:    m.PostID,
-			MediaURL:  m.MediaURL,
-			Order:     m.Order,
-			MediaType: m.MediaType,
-			CreatedAt: m.CreatedAt,
+			ID:           m.ID,
+			PostID:       m.PostID,
+			MediaURL:     m.MediaURL,
+			ThumbnailURL: m.ThumbnailURL,
+			Order:        m.Order,
+			MediaType:    m.MediaType,
+			CreatedAt:    m.CreatedAt,
 		}
 	}
 }
