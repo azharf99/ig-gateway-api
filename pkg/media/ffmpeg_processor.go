@@ -16,9 +16,11 @@ type EditMetadata struct {
 	TextStyle    string `json:"text_style"`    // "classic", "neon", "typewriter"
 	TextPosition string `json:"text_position"` // "upper-third", "center", "lower-third"
 	LogoPosition string `json:"logo_position"` // "top-center", "bottom-center"
+	LogoScale    int    `json:"logo_scale"`    // 10 to 100 percentage
 	MuteAudio    bool   `json:"mute_audio"`
 	HasAudio     bool   `json:"has_audio"`
 	HasLogo      bool   `json:"has_logo"`
+	HasSubtitles bool   `json:"has_subtitles"`
 }
 
 func getFontPath() string {
@@ -57,6 +59,42 @@ func escapeFFmpegText(s string) string {
 	s = strings.ReplaceAll(s, ":", "\\:")
 	s = strings.ReplaceAll(s, "%", "\\%")
 	return s
+}
+
+func escapeFFmpegFilterPath(p string) string {
+	p = strings.ReplaceAll(p, "\\", "/")
+	p = strings.ReplaceAll(p, ":", "\\:")
+	p = strings.ReplaceAll(p, "'", "'\\\\''")
+	return p
+}
+
+func wordWrap(text string, maxLineLength int) string {
+	lines := strings.Split(text, "\n")
+	var wrappedLines []string
+	for _, line := range lines {
+		words := strings.Fields(line)
+		if len(words) == 0 {
+			wrappedLines = append(wrappedLines, "")
+			continue
+		}
+		var wrapped string
+		currentLineLength := 0
+		for _, word := range words {
+			if currentLineLength > 0 {
+				if currentLineLength+1+len(word) > maxLineLength {
+					wrapped += "\n"
+					currentLineLength = 0
+				} else {
+					wrapped += " "
+					currentLineLength++
+				}
+			}
+			wrapped += word
+			currentLineLength += len(word)
+		}
+		wrappedLines = append(wrappedLines, wrapped)
+	}
+	return strings.Join(wrappedLines, "\n")
 }
 
 func GetVideoDuration(videoPath string) (float64, error) {
@@ -98,7 +136,7 @@ func GetVideoWidth(videoPath string) (int, error) {
 	return width, nil
 }
 
-func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath string, meta EditMetadata, outputPath string) error {
+func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath, subtitlePath string, meta EditMetadata, outputPath string) error {
 	duration, err := GetVideoDuration(videoPath)
 	if err != nil {
 		return fmt.Errorf("failed to get video duration: %w", err)
@@ -145,10 +183,14 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath string, me
 		if meta.LogoPosition == "bottom-center" {
 			logoY = "H-h-20"
 		}
-		// Scale logo to 15% of video width, maintain aspect ratio
-		scaledLogoWidth := int(float64(mainWidth) * 0.15)
+		// Scale logo to logoScale% of video width, maintain aspect ratio
+		scalePct := 0.15 // default
+		if meta.LogoScale >= 10 && meta.LogoScale <= 100 {
+			scalePct = float64(meta.LogoScale) / 100.0
+		}
+		scaledLogoWidth := int(float64(mainWidth) * scalePct)
 		if scaledLogoWidth <= 0 {
-			scaledLogoWidth = 162 // fallback for 1080p
+			scaledLogoWidth = int(float64(mainWidth) * 0.15)
 		}
 		filterComplex = append(filterComplex, fmt.Sprintf("[%d:v]scale=w=%d:h=-1[scaled_logo]", logoIdx, scaledLogoWidth))
 		filterComplex = append(filterComplex, fmt.Sprintf("[%s][scaled_logo]overlay=x=(W-w)/2:y=%s[logo_overlay]", currentVideoVar, logoY))
@@ -157,7 +199,8 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath string, me
 
 	// 2. Overlay Text Hook
 	if meta.Text != "" {
-		escapedText := escapeFFmpegText(meta.Text)
+		wrappedText := wordWrap(meta.Text, 15) // word-wrap at ~15 characters
+		escapedText := escapeFFmpegText(wrappedText)
 		fontPath := getFontPath()
 		fontOption := ""
 		if fontPath != "" {
@@ -168,12 +211,12 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath string, me
 		switch meta.TextStyle {
 		case "neon":
 			// Bright color with thick contrasting border to simulate glow
-			textStyleParams = "fontcolor=0xFF00FF:fontsize=h/15:borderw=4:bordercolor=white"
+			textStyleParams = "fontcolor=0xFF00FF:fontsize=w/15:borderw=4:bordercolor=white"
 		case "typewriter":
 			// Dark background box
-			textStyleParams = "fontcolor=white:fontsize=h/18:box=1:boxcolor=0x000000@0.7:boxborderw=15"
+			textStyleParams = "fontcolor=white:fontsize=w/18:box=1:boxcolor=0x000000@0.7:boxborderw=15"
 		default: // "classic"
-			textStyleParams = "fontcolor=white:fontsize=h/16:borderw=3:bordercolor=black"
+			textStyleParams = "fontcolor=white:fontsize=w/15:borderw=3:bordercolor=black"
 		}
 
 		yPos := "(h-text_h)/4" // upper-third
@@ -188,7 +231,14 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath string, me
 		currentVideoVar = "text_overlay"
 	}
 
-	// 3. Audio Mixing / Muting
+	// 3. Burn-in Subtitles
+	if meta.HasSubtitles && subtitlePath != "" {
+		escapedSubPath := escapeFFmpegFilterPath(subtitlePath)
+		filterComplex = append(filterComplex, fmt.Sprintf("[%s]subtitles='%s'[subtitles_overlay]", currentVideoVar, escapedSubPath))
+		currentVideoVar = "subtitles_overlay"
+	}
+
+	// 4. Audio Mixing / Muting
 	var hasOutputAudio bool
 	if meta.HasAudio && audioIdx != -1 {
 		hasOutputAudio = true
@@ -213,7 +263,7 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath string, me
 	}
 
 	// Map video output
-	if filterComplexStr != "" && strings.Contains(currentVideoVar, "overlay") {
+	if filterComplexStr != "" && strings.Contains(currentVideoVar, "_overlay") {
 		args = append(args, "-map", "["+currentVideoVar+"]")
 	} else {
 		args = append(args, "-map", "0:v")

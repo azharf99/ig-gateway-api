@@ -26,6 +26,7 @@ type CreatePostInput struct {
 	EditMetadata []media.EditMetadata `json:"-"`
 	AudioPath    string               `json:"-"`
 	LogoPath     string               `json:"-"`
+	SubtitlePath string               `json:"-"`
 }
 
 type Usecase interface {
@@ -80,12 +81,15 @@ func (u *postUsecase) CreatePost(ctx context.Context, input CreatePostInput) (*e
 		status = entities.PostStatusScheduled
 	}
 
-	// Clean up uploaded audio/logo files at the end of the usecase
+	// Clean up uploaded audio/logo/subtitle files at the end of the usecase
 	if input.AudioPath != "" {
 		defer os.Remove(input.AudioPath)
 	}
 	if input.LogoPath != "" {
 		defer os.Remove(input.LogoPath)
+	}
+	if input.SubtitlePath != "" {
+		defer os.Remove(input.SubtitlePath)
 	}
 
 	// Process videos if edit metadata is provided
@@ -93,7 +97,7 @@ func (u *postUsecase) CreatePost(ctx context.Context, input CreatePostInput) (*e
 		if input.MediaFiles[i].MediaType == "video" && i < len(input.EditMetadata) {
 			meta := input.EditMetadata[i]
 			// Check if we actually need to edit the video
-			if meta.Text != "" || meta.HasLogo || meta.HasAudio || meta.MuteAudio {
+			if meta.Text != "" || meta.HasLogo || meta.HasAudio || meta.MuteAudio || meta.HasSubtitles {
 				origRelativePath := input.MediaFiles[i].MediaURL
 
 				// Generate unique output filename
@@ -105,7 +109,7 @@ func (u *postUsecase) CreatePost(ctx context.Context, input CreatePostInput) (*e
 				log.Printf("[VideoProcessor] Processing video %s -> %s\n", origRelativePath, processedRelativePath)
 
 				// Run FFmpeg processing
-				err := media.ProcessVideo(ctx, origRelativePath, input.AudioPath, input.LogoPath, meta, processedRelativePath)
+				err := media.ProcessVideo(ctx, origRelativePath, input.AudioPath, input.LogoPath, input.SubtitlePath, meta, processedRelativePath)
 				if err != nil {
 					log.Printf("[VideoProcessor] Error processing video: %v\n", err)
 					return nil, fmt.Errorf("failed to process video: %w", err)

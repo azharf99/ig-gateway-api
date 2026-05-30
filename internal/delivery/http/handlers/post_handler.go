@@ -129,9 +129,10 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		}
 	}
 
-	// Parse audio and logo files
+	// Parse audio, logo, and subtitle files
 	var audioPath string
 	var logoPath string
+	var subtitlePath string
 
 	audioHeader, err := c.FormFile("audio_file")
 	if err == nil && audioHeader != nil {
@@ -158,6 +159,23 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		logoPath = savedLogo
 	}
 
+	subtitleHeader, err := c.FormFile("subtitle_file")
+	if err == nil && subtitleHeader != nil {
+		savedSubtitle, err := h.storageServ.SaveFile(subtitleHeader)
+		if err != nil {
+			h.cleanupMediaList(mediaList)
+			if audioPath != "" {
+				_ = h.storageServ.DeleteFile(audioPath)
+			}
+			if logoPath != "" {
+				_ = h.storageServ.DeleteFile(logoPath)
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to save subtitle file: %v", err)})
+			return
+		}
+		subtitlePath = savedSubtitle
+	}
+
 	input := post.CreatePostInput{
 		UserID:       userID,
 		Caption:      caption,
@@ -167,6 +185,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		EditMetadata: editMetadata,
 		AudioPath:    audioPath,
 		LogoPath:     logoPath,
+		SubtitlePath: subtitlePath,
 	}
 
 	createdPost, err := h.postUsecase.CreatePost(c.Request.Context(), input)
@@ -177,6 +196,9 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		}
 		if logoPath != "" {
 			_ = h.storageServ.DeleteFile(logoPath)
+		}
+		if subtitlePath != "" {
+			_ = h.storageServ.DeleteFile(subtitlePath)
 		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
