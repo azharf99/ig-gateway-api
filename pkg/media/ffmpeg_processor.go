@@ -82,6 +82,22 @@ func HasAudioStream(videoPath string) (bool, error) {
 	return strings.TrimSpace(out.String()) != "", nil
 }
 
+func GetVideoWidth(videoPath string) (int, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width", "-of", "default=noprint_wrappers=1:nokey=1", videoPath)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	err := cmd.Run()
+	if err != nil {
+		return 0, fmt.Errorf("ffprobe width error: %w", err)
+	}
+	widthStr := strings.TrimSpace(out.String())
+	width, err := strconv.Atoi(widthStr)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse width: %w", err)
+	}
+	return width, nil
+}
+
 func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath string, meta EditMetadata, outputPath string) error {
 	duration, err := GetVideoDuration(videoPath)
 	if err != nil {
@@ -91,6 +107,11 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath string, me
 	hasOrigAudio, err := HasAudioStream(videoPath)
 	if err != nil {
 		return fmt.Errorf("failed to check original audio stream: %w", err)
+	}
+
+	mainWidth := 1080 // fallback
+	if w, err := GetVideoWidth(videoPath); err == nil && w > 0 {
+		mainWidth = w
 	}
 
 	args := []string{"-y"} // overwrite output file
@@ -125,7 +146,11 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath string, me
 			logoY = "H-h-20"
 		}
 		// Scale logo to 15% of video width, maintain aspect ratio
-		filterComplex = append(filterComplex, fmt.Sprintf("[%d:v]scale=w=main_w*0.15:h=-1[scaled_logo]", logoIdx))
+		scaledLogoWidth := int(float64(mainWidth) * 0.15)
+		if scaledLogoWidth <= 0 {
+			scaledLogoWidth = 162 // fallback for 1080p
+		}
+		filterComplex = append(filterComplex, fmt.Sprintf("[%d:v]scale=w=%d:h=-1[scaled_logo]", logoIdx, scaledLogoWidth))
 		filterComplex = append(filterComplex, fmt.Sprintf("[%s][scaled_logo]overlay=x=(W-w)/2:y=%s[logo_overlay]", currentVideoVar, logoY))
 		currentVideoVar = "logo_overlay"
 	}
