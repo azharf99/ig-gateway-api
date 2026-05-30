@@ -159,7 +159,7 @@ func (c *instagramClient) PublishPhoto(igAccountID, accessToken, imageURL, capti
 func (c *instagramClient) PublishVideo(igAccountID, accessToken, videoURL, caption string, isReels bool) (string, error) {
 	// 1. Create Media Container
 	params := url.Values{}
-	params.Set("media_type", "VIDEO")
+	params.Set("media_type", "REELS")
 	params.Set("video_url", videoURL)
 	params.Set("caption", caption)
 	params.Set("access_token", accessToken)
