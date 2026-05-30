@@ -236,7 +236,8 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath string, me
 
 	// Video codec settings
 	// Use libx264, set profile, and fast presets to speed up processing on VPS
-	args = append(args, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "23")
+	// Added -profile:v main and -movflags +faststart to ensure Instagram API can process and stream it quickly without 2207082 errors.
+	args = append(args, "-c:v", "libx264", "-profile:v", "main", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "23", "-movflags", "+faststart")
 
 	// Cut to video duration
 	args = append(args, "-t", fmt.Sprintf("%.2f", duration))
