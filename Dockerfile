@@ -19,24 +19,26 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /app/api ./cmd/api
 # Stage 2: Create a minimal production container
 FROM alpine:latest
 
-RUN apk add --no-cache ca-certificates tzdata ffmpeg font-dejavu
+# Install dependencies, su-exec to securely drop root privileges, and dos2unix for Windows compatibility
+RUN apk add --no-cache ca-certificates tzdata ffmpeg font-dejavu su-exec dos2unix
 
-# Create non-root system user and group
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# Create non-root system user and group with standard UID/GID 1000
+RUN addgroup -g 1000 -S appgroup && adduser -u 1000 -S appuser -G appgroup
 
 WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /app/api .
 
-# Create uploads directory and configure ownership and permissions
+# Copy entrypoint script and fix potential Windows line endings
+COPY entrypoint.sh .
+RUN dos2unix entrypoint.sh && chmod +x entrypoint.sh
+
+# Create uploads directory and apply baseline permissions
 RUN mkdir -p /app/uploads && \
     chown -R appuser:appgroup /app && \
-    chmod 750 /app/uploads
+    chmod 770 /app/uploads
 
 EXPOSE 8080
 
-# Switch to non-root user
-USER appuser
-
-ENTRYPOINT ["./api"]
+ENTRYPOINT ["/app/entrypoint.sh"]
