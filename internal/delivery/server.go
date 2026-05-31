@@ -26,8 +26,8 @@ func (s *Server) Run() {
 	srv := &http.Server{
 		Addr:           ":" + config.AppConfig.Port,
 		Handler:        s.router,
-		ReadTimeout:    2 * time.Minute,
-		WriteTimeout:   5 * time.Minute,
+		ReadTimeout:    60 * time.Second,
+		WriteTimeout:   60 * time.Second,
 		IdleTimeout:    60 * time.Second,
 		MaxHeaderBytes: 1 << 20, // 1MB max header
 	}
@@ -47,7 +47,7 @@ func (s *Server) Run() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Fatal("Server forced to shutdown: ", err)
 	}

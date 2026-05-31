@@ -14,11 +14,12 @@ const (
 type PostStatus string
 
 const (
-	PostStatusDraft     PostStatus = "draft"
-	PostStatusScheduled PostStatus = "scheduled"
-	PostStatusPosting   PostStatus = "posting"
-	PostStatusPublished PostStatus = "published"
-	PostStatusFailed    PostStatus = "failed"
+	PostStatusDraft      PostStatus = "draft"
+	PostStatusProcessing PostStatus = "processing"
+	PostStatusScheduled  PostStatus = "scheduled"
+	PostStatusPosting    PostStatus = "posting"
+	PostStatusPublished  PostStatus = "published"
+	PostStatusFailed     PostStatus = "failed"
 )
 
 type Post struct {

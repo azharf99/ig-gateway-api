@@ -73,32 +73,87 @@ func (u *postUsecase) CreatePost(ctx context.Context, input CreatePostInput) (*e
 		return nil, errors.New("user not found")
 	}
 
-	status := entities.PostStatusDraft
+	// Determine the final status after processing completes
+	finalStatus := entities.PostStatusDraft
 	if input.ScheduledAt != nil {
 		if input.ScheduledAt.Before(time.Now()) {
 			return nil, errors.New("scheduled time must be in the future")
 		}
-		status = entities.PostStatusScheduled
+		finalStatus = entities.PostStatusScheduled
 	}
 
-	// Clean up uploaded audio/logo/subtitle files at the end of the usecase
-	if input.AudioPath != "" {
-		defer os.Remove(input.AudioPath)
-	}
-	if input.LogoPath != "" {
-		defer os.Remove(input.LogoPath)
-	}
-	if input.SubtitlePath != "" {
-		defer os.Remove(input.SubtitlePath)
-	}
-
-	// Process videos if edit metadata is provided
+	// Check if any video needs editing (ffmpeg processing)
+	needsVideoProcessing := false
 	for i := range input.MediaFiles {
 		if input.MediaFiles[i].MediaType == "video" && i < len(input.EditMetadata) {
 			meta := input.EditMetadata[i]
-			// Check if we actually need to edit the video
 			if meta.Text != "" || meta.HasLogo || meta.HasAudio || meta.MuteAudio || meta.HasSubtitles {
-				origRelativePath := input.MediaFiles[i].MediaURL
+				needsVideoProcessing = true
+				break
+			}
+		}
+	}
+
+	// Set initial status: 'processing' if video needs ffmpeg, otherwise final status
+	initialStatus := finalStatus
+	if needsVideoProcessing {
+		initialStatus = entities.PostStatusProcessing
+	}
+
+	post := &entities.Post{
+		UserID:      input.UserID,
+		Caption:     input.Caption,
+		PostType:    input.PostType,
+		Status:      initialStatus,
+		ScheduledAt: input.ScheduledAt,
+		Media:       input.MediaFiles,
+	}
+
+	if err := u.postRepo.Create(ctx, post); err != nil {
+		return nil, err
+	}
+
+	if needsVideoProcessing {
+		// Process video in background goroutine so HTTP response returns immediately
+		go u.processVideoInBackground(post.ID, input, finalStatus)
+	} else {
+		// No video processing needed — generate thumbnails for raw videos and publish if immediate
+		go u.generateThumbnailsAndFinalize(post.ID, input, finalStatus)
+	}
+
+	return post, nil
+}
+
+// processVideoInBackground runs ffmpeg video processing in a background goroutine,
+// then updates the post status to finalStatus on success or 'failed' on error.
+// This ensures the HTTP handler returns immediately without waiting for encoding.
+func (u *postUsecase) processVideoInBackground(postID uint, input CreatePostInput, finalStatus entities.PostStatus) {
+	bgCtx := context.Background()
+
+	log.Printf("[VideoProcessor] Starting background processing for post %d\n", postID)
+
+	// Clean up audio/logo/subtitle temp files when processing is done
+	defer func() {
+		if input.AudioPath != "" {
+			os.Remove(input.AudioPath)
+		}
+		if input.LogoPath != "" {
+			os.Remove(input.LogoPath)
+		}
+		if input.SubtitlePath != "" {
+			os.Remove(input.SubtitlePath)
+		}
+	}()
+
+	// Process each video that has edit metadata
+	var processedMedia []entities.PostMedia
+	for i := range input.MediaFiles {
+		mediaCopy := input.MediaFiles[i]
+
+		if mediaCopy.MediaType == "video" && i < len(input.EditMetadata) {
+			meta := input.EditMetadata[i]
+			if meta.Text != "" || meta.HasLogo || meta.HasAudio || meta.MuteAudio || meta.HasSubtitles {
+				origRelativePath := mediaCopy.MediaURL
 
 				// Generate unique output filename
 				ext := filepath.Ext(origRelativePath)
@@ -108,26 +163,77 @@ func (u *postUsecase) CreatePost(ctx context.Context, input CreatePostInput) (*e
 
 				log.Printf("[VideoProcessor] Processing video %s -> %s\n", origRelativePath, processedRelativePath)
 
-				// Run FFmpeg processing with a dedicated context to prevent
-				// HTTP request timeout from killing the ffmpeg process
-				videoCtx, videoCancel := context.WithTimeout(context.Background(), 4*time.Minute)
-				defer videoCancel()
+				videoCtx, videoCancel := context.WithTimeout(bgCtx, 4*time.Minute)
 				err := media.ProcessVideo(videoCtx, origRelativePath, input.AudioPath, input.LogoPath, input.SubtitlePath, meta, processedRelativePath)
+				videoCancel()
+
 				if err != nil {
-					log.Printf("[VideoProcessor] Error processing video: %v\n", err)
-					return nil, fmt.Errorf("failed to process video: %w", err)
+					log.Printf("[VideoProcessor] Error processing video for post %d: %v\n", postID, err)
+					u.failPost(bgCtx, postID, fmt.Sprintf("Video processing failed: %v", err))
+					return
 				}
 
 				// Delete original file since we now have the processed one
 				_ = os.Remove(origRelativePath)
 
-				// Update media model URL to use the processed path
-				input.MediaFiles[i].MediaURL = filepath.ToSlash(processedRelativePath)
+				// Update media URL to processed path
+				mediaCopy.MediaURL = filepath.ToSlash(processedRelativePath)
 			}
 		}
+
+		// Generate thumbnail for video
+		if mediaCopy.MediaType == "video" {
+			videoPath := mediaCopy.MediaURL
+			ext := filepath.Ext(videoPath)
+			thumbPath := strings.TrimSuffix(videoPath, ext) + "-thumb.jpg"
+
+			log.Printf("[VideoProcessor] Generating thumbnail for video %s -> %s\n", videoPath, thumbPath)
+			thumbCtx, thumbCancel := context.WithTimeout(bgCtx, 2*time.Minute)
+			err := media.GenerateThumbnail(thumbCtx, videoPath, thumbPath)
+			thumbCancel()
+
+			if err != nil {
+				log.Printf("[VideoProcessor] Error generating thumbnail: %v\n", err)
+			} else {
+				mediaCopy.ThumbnailURL = filepath.ToSlash(thumbPath)
+			}
+		}
+
+		processedMedia = append(processedMedia, mediaCopy)
 	}
 
-	// Generate thumbnails for all video files
+	// Fetch the post again to update it
+	post, err := u.postRepo.GetByID(bgCtx, postID)
+	if err != nil || post == nil {
+		log.Printf("[VideoProcessor] Error fetching post %d after processing: %v\n", postID, err)
+		return
+	}
+
+	// Update media URLs and thumbnail URLs
+	post.Media = processedMedia
+	post.Status = finalStatus
+	post.ErrorMessage = ""
+
+	if err := u.postRepo.Update(bgCtx, post); err != nil {
+		log.Printf("[VideoProcessor] Error updating post %d after processing: %v\n", postID, err)
+		return
+	}
+
+	log.Printf("[VideoProcessor] Post %d processing complete. Status: %s\n", postID, finalStatus)
+
+	// If not scheduled (draft/immediate), publish immediately
+	if finalStatus == entities.PostStatusDraft {
+		_ = u.PublishPostNow(bgCtx, post.ID)
+	}
+}
+
+// generateThumbnailsAndFinalize handles posts that don't need ffmpeg processing
+// but still need thumbnails and potential immediate publishing.
+func (u *postUsecase) generateThumbnailsAndFinalize(postID uint, input CreatePostInput, finalStatus entities.PostStatus) {
+	bgCtx := context.Background()
+
+	// Generate thumbnails for video files
+	hasUpdates := false
 	for i := range input.MediaFiles {
 		if input.MediaFiles[i].MediaType == "video" {
 			videoPath := input.MediaFiles[i].MediaURL
@@ -135,39 +241,44 @@ func (u *postUsecase) CreatePost(ctx context.Context, input CreatePostInput) (*e
 			thumbPath := strings.TrimSuffix(videoPath, ext) + "-thumb.jpg"
 
 			log.Printf("[VideoProcessor] Generating thumbnail for video %s -> %s\n", videoPath, thumbPath)
-			thumbCtx, thumbCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer thumbCancel()
+			thumbCtx, thumbCancel := context.WithTimeout(bgCtx, 2*time.Minute)
 			err := media.GenerateThumbnail(thumbCtx, videoPath, thumbPath)
+			thumbCancel()
+
 			if err != nil {
 				log.Printf("[VideoProcessor] Error generating thumbnail: %v\n", err)
 			} else {
 				input.MediaFiles[i].ThumbnailURL = filepath.ToSlash(thumbPath)
+				hasUpdates = true
 			}
 		}
 	}
 
-	post := &entities.Post{
-		UserID:      input.UserID,
-		Caption:     input.Caption,
-		PostType:    input.PostType,
-		Status:      status,
-		ScheduledAt: input.ScheduledAt,
-		Media:       input.MediaFiles,
+	// Update post with thumbnail URLs if any were generated
+	if hasUpdates {
+		post, err := u.postRepo.GetByID(bgCtx, postID)
+		if err == nil && post != nil {
+			post.Media = input.MediaFiles
+			_ = u.postRepo.Update(bgCtx, post)
+		}
 	}
 
-	if err := u.postRepo.Create(ctx, post); err != nil {
-		return nil, err
+	// If not scheduled, publish immediately
+	if finalStatus == entities.PostStatusDraft {
+		_ = u.PublishPostNow(bgCtx, postID)
 	}
+}
 
-	// If not scheduled, publish immediately in a non-blocking goroutine
-	if input.ScheduledAt == nil {
-		go func(id uint) {
-			ctxBg := context.Background()
-			_ = u.PublishPostNow(ctxBg, id)
-		}(post.ID)
+// failPost marks a post as failed with an error message.
+func (u *postUsecase) failPost(ctx context.Context, postID uint, errMsg string) {
+	post, err := u.postRepo.GetByID(ctx, postID)
+	if err != nil || post == nil {
+		log.Printf("[VideoProcessor] Could not fetch post %d to mark as failed: %v\n", postID, err)
+		return
 	}
-
-	return post, nil
+	post.Status = entities.PostStatusFailed
+	post.ErrorMessage = errMsg
+	_ = u.postRepo.Update(ctx, post)
 }
 
 func (u *postUsecase) GetPosts(ctx context.Context, userID uint) ([]entities.Post, error) {

@@ -285,8 +285,13 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 		return
 	}
 
+	message := "Post created successfully"
+	if createdPost.Status == "processing" {
+		message = "Post created. Video is being processed in the background."
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
-		"message": "Post created successfully",
+		"message": message,
 		"post":    createdPost,
 	})
 }
