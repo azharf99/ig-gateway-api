@@ -201,19 +201,16 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath, subtitleP
 	// 2. Overlay Text Hook
 	if meta.Text != "" {
 		wrappedText := wordWrap(meta.Text, 15) // word-wrap at ~15 characters
+		safeText := strings.ReplaceAll(wrappedText, "\r\n", "\n")
+		safeText = strings.ReplaceAll(safeText, "\r", "")
+		lines := strings.Split(safeText, "\n")
 		
-		// Create a temporary file for the text to avoid escaping and newline issues in ffmpeg
-		tmpFile, err := os.CreateTemp("", "ffmpeg_text_*.txt")
-		if err != nil {
-			return fmt.Errorf("failed to create temp file for text: %w", err)
+		var validLines []string
+		for _, l := range lines {
+			if strings.TrimSpace(l) != "" {
+				validLines = append(validLines, strings.TrimSpace(l))
+			}
 		}
-		defer os.Remove(tmpFile.Name())
-		
-		if _, err := tmpFile.WriteString(wrappedText); err != nil {
-			tmpFile.Close()
-			return fmt.Errorf("failed to write text to temp file: %w", err)
-		}
-		tmpFile.Close()
 
 		fontPath := getFontPath()
 		fontOption := ""
@@ -234,17 +231,28 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath, subtitleP
 			textStyleParams = "fontcolor=white:fontsize=w/15:borderw=3:bordercolor=black"
 		}
 
-		yPos := "(h-text_h)/4" // upper-third
-		switch meta.TextPosition {
-		case "center":
-			yPos = "(h-text_h)/2"
-		case "lower-third":
-			yPos = "(h-text_h)*3/4"
-		}
+		numLines := len(validLines)
+		for i, line := range validLines {
+			escapedLine := escapeFFmpegText(line)
+			yOffsetExpr := fmt.Sprintf("(text_h+15)*%d", i) // 15px gap between lines
+			
+			var yExpr string
+			switch meta.TextPosition {
+			case "center":
+				yExpr = fmt.Sprintf("(h-(text_h*%d))/2 + %s", numLines, yOffsetExpr)
+			case "lower-third":
+				yExpr = fmt.Sprintf("(h-(text_h*%d))*3/4 + %s", numLines, yOffsetExpr)
+			default: // upper-third
+				yExpr = fmt.Sprintf("(h-(text_h*%d))/4 + %s", numLines, yOffsetExpr)
+			}
 
-		escapedTextfilePath := escapeFFmpegFilterPath(tmpFile.Name())
-		filterComplex = append(filterComplex, fmt.Sprintf("[%s]drawtext=%s%s:x=(w-text_w)/2:y=%s:textfile='%s'[text_overlay]", currentVideoVar, fontOption, textStyleParams, yPos, escapedTextfilePath))
-		currentVideoVar = "text_overlay"
+			nextVar := fmt.Sprintf("text_overlay_%d", i)
+			filterStr := fmt.Sprintf("[%s]drawtext=%s%s:x=(w-text_w)/2:y=%s:text='%s'[%s]", 
+				currentVideoVar, fontOption, textStyleParams, yExpr, escapedLine, nextVar)
+			
+			filterComplex = append(filterComplex, filterStr)
+			currentVideoVar = nextVar
+		}
 	}
 
 	// 3. Burn-in Subtitles
