@@ -26,8 +26,8 @@ func (s *Server) Run() {
 	srv := &http.Server{
 		Addr:           ":" + config.AppConfig.Port,
 		Handler:        s.router,
-		ReadTimeout:    15 * time.Second,
-		WriteTimeout:   30 * time.Second,
+		ReadTimeout:    2 * time.Minute,
+		WriteTimeout:   5 * time.Minute,
 		IdleTimeout:    60 * time.Second,
 		MaxHeaderBytes: 1 << 20, // 1MB max header
 	}

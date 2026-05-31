@@ -108,8 +108,11 @@ func (u *postUsecase) CreatePost(ctx context.Context, input CreatePostInput) (*e
 
 				log.Printf("[VideoProcessor] Processing video %s -> %s\n", origRelativePath, processedRelativePath)
 
-				// Run FFmpeg processing
-				err := media.ProcessVideo(ctx, origRelativePath, input.AudioPath, input.LogoPath, input.SubtitlePath, meta, processedRelativePath)
+				// Run FFmpeg processing with a dedicated context to prevent
+				// HTTP request timeout from killing the ffmpeg process
+				videoCtx, videoCancel := context.WithTimeout(context.Background(), 4*time.Minute)
+				defer videoCancel()
+				err := media.ProcessVideo(videoCtx, origRelativePath, input.AudioPath, input.LogoPath, input.SubtitlePath, meta, processedRelativePath)
 				if err != nil {
 					log.Printf("[VideoProcessor] Error processing video: %v\n", err)
 					return nil, fmt.Errorf("failed to process video: %w", err)
@@ -132,7 +135,9 @@ func (u *postUsecase) CreatePost(ctx context.Context, input CreatePostInput) (*e
 			thumbPath := strings.TrimSuffix(videoPath, ext) + "-thumb.jpg"
 
 			log.Printf("[VideoProcessor] Generating thumbnail for video %s -> %s\n", videoPath, thumbPath)
-			err := media.GenerateThumbnail(ctx, videoPath, thumbPath)
+			thumbCtx, thumbCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer thumbCancel()
+			err := media.GenerateThumbnail(thumbCtx, videoPath, thumbPath)
 			if err != nil {
 				log.Printf("[VideoProcessor] Error generating thumbnail: %v\n", err)
 			} else {

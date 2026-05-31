@@ -291,6 +291,9 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath, subtitleP
 		if !meta.MuteAudio && hasOrigAudio {
 			// Mix original audio and uploaded audio
 			filterComplex = append(filterComplex, fmt.Sprintf("[0:a][%d:a]amix=inputs=2:duration=first[mixed_audio]", audioIdx))
+		} else {
+			// Mute original or no original audio: trim external audio to video duration
+			filterComplex = append(filterComplex, fmt.Sprintf("[%d:a]atrim=0:%.2f,asetpts=PTS-STARTPTS[trimmed_audio]", audioIdx, duration))
 		}
 	} else {
 		// No custom audio
@@ -319,6 +322,8 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath, subtitleP
 	if hasOutputAudio {
 		if filterComplexStr != "" && strings.Contains(filterComplexStr, "mixed_audio") {
 			args = append(args, "-map", "[mixed_audio]")
+		} else if filterComplexStr != "" && strings.Contains(filterComplexStr, "trimmed_audio") {
+			args = append(args, "-map", "[trimmed_audio]")
 		} else {
 			// Fallback to mapping input audio directly
 			if meta.HasAudio && audioIdx != -1 {
