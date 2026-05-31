@@ -26,7 +26,9 @@ type Usecase interface {
 	Register(ctx context.Context, input RegisterInput) (*entities.User, error)
 	Login(ctx context.Context, input LoginInput) (string, *entities.User, error)
 	GetProfile(ctx context.Context, userID uint) (*entities.User, error)
-	LinkInstagram(ctx context.Context, userID uint, code string) error
+	LinkInstagram(ctx context.Context, userID uint, code string, state string) error
+	SaveOAuthState(ctx context.Context, userID uint, state string) error
+	RefreshExpiredTokens(ctx context.Context) error
 }
 
 type authUsecase struct {
@@ -93,7 +95,7 @@ func (u *authUsecase) GetProfile(ctx context.Context, userID uint) (*entities.Us
 	return u.userRepo.GetByID(ctx, userID)
 }
 
-func (u *authUsecase) LinkInstagram(ctx context.Context, userID uint, code string) error {
+func (u *authUsecase) SaveOAuthState(ctx context.Context, userID uint, state string) error {
 	user, err := u.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return err
@@ -102,21 +104,46 @@ func (u *authUsecase) LinkInstagram(ctx context.Context, userID uint, code strin
 		return errors.New("user not found")
 	}
 
+	user.OAuthState = state
+	return u.userRepo.Update(ctx, user)
+}
+
+func (u *authUsecase) LinkInstagram(ctx context.Context, userID uint, code string, state string) error {
+	user, err := u.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if user == nil {
+		return errors.New("user not found")
+	}
+
+	// CSRF validation
+	if state == "" || user.OAuthState == "" || user.OAuthState != state {
+		return errors.New("invalid oauth state (possible CSRF attack)")
+	}
+
+	// Clear the state after use
+	user.OAuthState = ""
+
 	// 1. Exchange OAuth code for a short-lived user access token
 	shortToken, err := u.igClient.GetShortLivedToken(code)
 	if err != nil {
+		// Reset state so it cannot be reused
+		_ = u.userRepo.Update(ctx, user)
 		return err
 	}
 
 	// 2. Exchange short-lived token for a long-lived user/page access token
 	longToken, err := u.igClient.GetLongLivedToken(shortToken)
 	if err != nil {
+		_ = u.userRepo.Update(ctx, user)
 		return err
 	}
 
 	// 3. Find connected Instagram business account ID using longToken
 	igAccountID, err := u.igClient.GetInstagramAccountID(longToken)
 	if err != nil {
+		_ = u.userRepo.Update(ctx, user)
 		return err
 	}
 
@@ -126,3 +153,24 @@ func (u *authUsecase) LinkInstagram(ctx context.Context, userID uint, code strin
 
 	return u.userRepo.Update(ctx, user)
 }
+
+func (u *authUsecase) RefreshExpiredTokens(ctx context.Context) error {
+	users, err := u.userRepo.GetAllWithInstagramToken(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, user := range users {
+		newToken, err := u.igClient.RefreshLongLivedToken(user.InstagramAccessToken)
+		if err != nil {
+			// Log error and continue to avoid failing the whole batch
+			continue
+		}
+
+		user.InstagramAccessToken = newToken
+		_ = u.userRepo.Update(ctx, user)
+	}
+
+	return nil
+}
+

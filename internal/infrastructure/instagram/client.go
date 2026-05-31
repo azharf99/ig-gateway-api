@@ -1,11 +1,12 @@
 package instagram
 
 import (
-	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,6 +22,7 @@ type Client interface {
 	PublishPhoto(igAccountID, accessToken, imageURL, caption string) (string, error)
 	PublishVideo(igAccountID, accessToken, videoURL, caption string, isReels bool) (string, error)
 	PublishCarousel(igAccountID, accessToken, caption string, items []CarouselItem) (string, error)
+	RefreshLongLivedToken(currentToken string) (string, error)
 }
 
 type CarouselItem struct {
@@ -40,6 +42,13 @@ func NewInstagramClient() Client {
 	}
 }
 
+// generateAppSecretProof calculates the HMAC-SHA256 signature for Meta's appsecret_proof requirement
+func generateAppSecretProof(accessToken string) string {
+	h := hmac.New(sha256.New, []byte(config.AppConfig.IGClientSecret))
+	h.Write([]byte(accessToken))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // GetShortLivedToken exchanges the OAuth code for a short-lived user access token
 func (c *instagramClient) GetShortLivedToken(code string) (string, error) {
 	data := url.Values{}
@@ -55,9 +64,8 @@ func (c *instagramClient) GetShortLivedToken(code string) (string, error) {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[DEBUG] GetShortLivedToken Facebook Response Code: %d, Body: %s", resp.StatusCode, string(body))
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("oauth failed: %s", string(body))
+		return "", fmt.Errorf("oauth failed with status %d", resp.StatusCode)
 	}
 
 	var res struct {
@@ -72,8 +80,9 @@ func (c *instagramClient) GetShortLivedToken(code string) (string, error) {
 
 // GetLongLivedToken exchanges a short-lived access token for a long-lived page/user token (60 days)
 func (c *instagramClient) GetLongLivedToken(shortLivedToken string) (string, error) {
-	u := fmt.Sprintf("%s/oauth/access_token?grant_type=fb_exchange_token&client_id=%s&client_secret=%s&fb_exchange_token=%s",
-		c.graphURL, config.AppConfig.IGClientID, config.AppConfig.IGClientSecret, shortLivedToken)
+	proof := generateAppSecretProof(shortLivedToken)
+	u := fmt.Sprintf("%s/oauth/access_token?grant_type=fb_exchange_token&client_id=%s&client_secret=%s&fb_exchange_token=%s&appsecret_proof=%s",
+		c.graphURL, config.AppConfig.IGClientID, config.AppConfig.IGClientSecret, shortLivedToken, proof)
 
 	resp, err := c.httpClient.Get(u)
 	if err != nil {
@@ -82,9 +91,35 @@ func (c *instagramClient) GetLongLivedToken(shortLivedToken string) (string, err
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[DEBUG] GetLongLivedToken Facebook Response Code: %d, Body: %s", resp.StatusCode, string(body))
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to get long-lived token: %s", string(body))
+		return "", fmt.Errorf("failed to get long-lived token: status code %d", resp.StatusCode)
+	}
+
+	var res struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(body, &res); err != nil {
+		return "", err
+	}
+
+	return res.AccessToken, nil
+}
+
+// RefreshLongLivedToken refreshes a long-lived access token (generating a new one valid for 60 days)
+func (c *instagramClient) RefreshLongLivedToken(currentToken string) (string, error) {
+	proof := generateAppSecretProof(currentToken)
+	u := fmt.Sprintf("%s/oauth/access_token?grant_type=fb_exchange_token&client_id=%s&client_secret=%s&fb_exchange_token=%s&appsecret_proof=%s",
+		c.graphURL, config.AppConfig.IGClientID, config.AppConfig.IGClientSecret, currentToken, proof)
+
+	resp, err := c.httpClient.Get(u)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to refresh token: status code %d", resp.StatusCode)
 	}
 
 	var res struct {
@@ -99,8 +134,8 @@ func (c *instagramClient) GetLongLivedToken(shortLivedToken string) (string, err
 
 // GetInstagramAccountID fetches the Instagram Business/Creator account ID from the linked Facebook Pages
 func (c *instagramClient) GetInstagramAccountID(userAccessToken string) (string, error) {
-	// 1. Get Facebook Pages managed by user requesting name, id, and instagram_business_account
-	u := fmt.Sprintf("%s/me/accounts?fields=id,name,instagram_business_account&access_token=%s", c.graphURL, userAccessToken)
+	proof := generateAppSecretProof(userAccessToken)
+	u := fmt.Sprintf("%s/me/accounts?fields=id,name,instagram_business_account&access_token=%s&appsecret_proof=%s", c.graphURL, userAccessToken, proof)
 	resp, err := c.httpClient.Get(u)
 	if err != nil {
 		return "", err
@@ -108,9 +143,8 @@ func (c *instagramClient) GetInstagramAccountID(userAccessToken string) (string,
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[DEBUG] GetInstagramAccountID Facebook Response Code: %d, Body: %s", resp.StatusCode, string(body))
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to get FB Pages: %s", string(body))
+		return "", fmt.Errorf("failed to get FB Pages: status code %d", resp.StatusCode)
 	}
 
 	var pageResponse struct {
@@ -129,7 +163,6 @@ func (c *instagramClient) GetInstagramAccountID(userAccessToken string) (string,
 
 	// Look for a page that has an Instagram Business/Creator Account linked
 	for _, page := range pageResponse.Data {
-		log.Printf("[DEBUG] Found FB Page: %s (%s), Linked IG Account ID: %s", page.Name, page.ID, page.InstagramBusinessAccount.ID)
 		if page.InstagramBusinessAccount.ID != "" {
 			return page.InstagramBusinessAccount.ID, nil
 		}
@@ -140,7 +173,6 @@ func (c *instagramClient) GetInstagramAccountID(userAccessToken string) (string,
 
 // PublishPhoto uploads and publishes a single image
 func (c *instagramClient) PublishPhoto(igAccountID, accessToken, imageURL, caption string) (string, error) {
-	// 1. Create Media Container
 	params := url.Values{}
 	params.Set("image_url", imageURL)
 	params.Set("caption", caption)
@@ -151,20 +183,18 @@ func (c *instagramClient) PublishPhoto(igAccountID, accessToken, imageURL, capti
 		return "", err
 	}
 
-	// 2. Publish Container
 	return c.publishContainer(igAccountID, containerID, accessToken)
 }
 
 // PublishVideo uploads and publishes a single video or Reel
 func (c *instagramClient) PublishVideo(igAccountID, accessToken, videoURL, caption string, isReels bool) (string, error) {
-	// 1. Create Media Container
 	params := url.Values{}
 	params.Set("media_type", "REELS")
 	params.Set("video_url", videoURL)
 	params.Set("caption", caption)
 	params.Set("access_token", accessToken)
 	if isReels {
-		params.Set("share_to_feed", "true") // Standard for Reels
+		params.Set("share_to_feed", "true")
 	}
 
 	containerID, err := c.createContainer(igAccountID, params)
@@ -172,12 +202,10 @@ func (c *instagramClient) PublishVideo(igAccountID, accessToken, videoURL, capti
 		return "", err
 	}
 
-	// 2. Videos need to be processed by Instagram before publishing
 	if err := c.pollContainerStatus(containerID, accessToken); err != nil {
 		return "", err
 	}
 
-	// 3. Publish Container
 	return c.publishContainer(igAccountID, containerID, accessToken)
 }
 
@@ -189,7 +217,6 @@ func (c *instagramClient) PublishCarousel(igAccountID, accessToken, caption stri
 
 	var childIDs []string
 
-	// 1. Create container for each item
 	for _, item := range items {
 		params := url.Values{}
 		params.Set("is_carousel_item", "true")
@@ -209,7 +236,6 @@ func (c *instagramClient) PublishCarousel(igAccountID, accessToken, caption stri
 		childIDs = append(childIDs, childID)
 	}
 
-	// 2. Wait for any video items to process
 	for i, item := range items {
 		if item.MediaType == "video" {
 			if err := c.pollContainerStatus(childIDs[i], accessToken); err != nil {
@@ -218,7 +244,6 @@ func (c *instagramClient) PublishCarousel(igAccountID, accessToken, caption stri
 		}
 	}
 
-	// 3. Create parent Carousel container
 	parentParams := url.Values{}
 	parentParams.Set("media_type", "CAROUSEL")
 	parentParams.Set("caption", caption)
@@ -230,7 +255,6 @@ func (c *instagramClient) PublishCarousel(igAccountID, accessToken, caption stri
 		return "", fmt.Errorf("failed to create parent carousel container: %v", err)
 	}
 
-	// 4. Publish parent Carousel container
 	return c.publishContainer(igAccountID, parentContainerID, accessToken)
 }
 
@@ -238,7 +262,13 @@ func (c *instagramClient) PublishCarousel(igAccountID, accessToken, caption stri
 func (c *instagramClient) createContainer(igAccountID string, params url.Values) (string, error) {
 	apiURL := fmt.Sprintf("%s/%s/media", c.graphURL, igAccountID)
 
-	resp, err := c.httpClient.Post(fmt.Sprintf("%s?%s", apiURL, params.Encode()), "application/json", bytes.NewBuffer([]byte{}))
+	accessToken := params.Get("access_token")
+	if accessToken != "" {
+		params.Set("appsecret_proof", generateAppSecretProof(accessToken))
+	}
+
+	// Post params as application/x-www-form-urlencoded inside the request body
+	resp, err := c.httpClient.PostForm(apiURL, params)
 	if err != nil {
 		return "", err
 	}
@@ -246,7 +276,7 @@ func (c *instagramClient) createContainer(igAccountID string, params url.Values)
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("container creation failed (code %d): %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("container creation failed: status %d", resp.StatusCode)
 	}
 
 	var res struct {
@@ -264,8 +294,9 @@ func (c *instagramClient) publishContainer(igAccountID, containerID, accessToken
 	params := url.Values{}
 	params.Set("creation_id", containerID)
 	params.Set("access_token", accessToken)
+	params.Set("appsecret_proof", generateAppSecretProof(accessToken))
 
-	resp, err := c.httpClient.Post(fmt.Sprintf("%s?%s", apiURL, params.Encode()), "application/json", bytes.NewBuffer([]byte{}))
+	resp, err := c.httpClient.PostForm(apiURL, params)
 	if err != nil {
 		return "", err
 	}
@@ -273,7 +304,7 @@ func (c *instagramClient) publishContainer(igAccountID, containerID, accessToken
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("publishing failed (code %d): %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("publishing failed: status %d", resp.StatusCode)
 	}
 
 	var res struct {
@@ -287,9 +318,9 @@ func (c *instagramClient) publishContainer(igAccountID, containerID, accessToken
 }
 
 func (c *instagramClient) pollContainerStatus(containerID, accessToken string) error {
-	apiURL := fmt.Sprintf("%s/%s?fields=status_code,status&access_token=%s", c.graphURL, containerID, accessToken)
+	proof := generateAppSecretProof(accessToken)
+	apiURL := fmt.Sprintf("%s/%s?fields=status_code,status&access_token=%s&appsecret_proof=%s", c.graphURL, containerID, accessToken, proof)
 
-	// Poll up to 5 minutes (30 attempts, 10s sleep)
 	for i := 0; i < 30; i++ {
 		resp, err := c.httpClient.Get(apiURL)
 		if err != nil {
@@ -299,7 +330,7 @@ func (c *instagramClient) pollContainerStatus(containerID, accessToken string) e
 
 		body, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("status check failed (code %d): %s", resp.StatusCode, string(body))
+			return fmt.Errorf("status check failed: status %d", resp.StatusCode)
 		}
 
 		var res struct {
@@ -310,13 +341,11 @@ func (c *instagramClient) pollContainerStatus(containerID, accessToken string) e
 			return err
 		}
 
-		log.Printf("Polling container %s. Status: %s (%s)\n", containerID, res.StatusCode, res.Status)
-
 		if res.StatusCode == "FINISHED" {
 			return nil
 		}
 		if res.StatusCode == "ERROR" {
-			return fmt.Errorf("facebook container video processing error: %s", res.Status)
+			return fmt.Errorf("facebook container video processing error")
 		}
 
 		time.Sleep(10 * time.Second)
@@ -324,3 +353,4 @@ func (c *instagramClient) pollContainerStatus(containerID, accessToken string) e
 
 	return fmt.Errorf("video processing timed out on Instagram servers")
 }
+

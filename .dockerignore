@@ -1,0 +1,13 @@
+.git
+.github
+.env
+api.exe
+uploads/
+node_modules/
+dist/
+Dockerfile
+docker-compose.yml
+*.log
+*.tmp
+tmp/
+bin/

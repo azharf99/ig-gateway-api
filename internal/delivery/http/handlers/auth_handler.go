@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -87,6 +89,23 @@ func (h *AuthHandler) GetMe(c *gin.Context) {
 }
 
 func (h *AuthHandler) GetInstagramOAuthURL(c *gin.Context) {
+	userID := c.MustGet("userID").(uint)
+
+	// Generate 16 bytes cryptographically secure random state (hex-encoded string)
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		return
+	}
+	state := hex.EncodeToString(b)
+
+	// Save OAuth state to database for user
+	err := h.authUsecase.SaveOAuthState(c.Request.Context(), userID, state)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		return
+	}
+
 	clientID := config.AppConfig.IGClientID
 	redirectURI := config.AppConfig.IGRedirectURI
 	scopes := []string{
@@ -100,11 +119,12 @@ func (h *AuthHandler) GetInstagramOAuthURL(c *gin.Context) {
 	extras := `{"setup":{"channel":"IG_API_ONBOARDING"}}`
 
 	oauthURL := fmt.Sprintf(
-		"https://www.facebook.com/v25.0/dialog/oauth?client_id=%s&redirect_uri=%s&scope=%s&response_type=code&display=page&extras=%s",
+		"https://www.facebook.com/v25.0/dialog/oauth?client_id=%s&redirect_uri=%s&scope=%s&response_type=code&display=page&extras=%s&state=%s",
 		clientID,
 		url.QueryEscape(redirectURI),
 		url.QueryEscape(stringsJoin(scopes, ",")),
 		url.QueryEscape(extras),
+		state,
 	)
 
 	c.JSON(http.StatusOK, gin.H{"url": oauthURL})
@@ -114,17 +134,18 @@ func (h *AuthHandler) LinkInstagram(c *gin.Context) {
 	userID := c.MustGet("userID").(uint)
 
 	var req struct {
-		Code string `json:"code" binding:"required"`
+		Code  string `json:"code" binding:"required"`
+		State string `json:"state" binding:"required"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
 		return
 	}
 
-	err := h.authUsecase.LinkInstagram(c.Request.Context(), userID, req.Code)
+	err := h.authUsecase.LinkInstagram(c.Request.Context(), userID, req.Code, req.State)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to link Instagram account. Verification failed."})
 		return
 	}
 

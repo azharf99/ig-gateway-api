@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -23,7 +25,6 @@ type localStorage struct {
 }
 
 func NewLocalStorage(uploadDir string) StorageService {
-	// Ensure directory exists
 	if _, err := os.Stat(uploadDir); os.IsNotExist(err) {
 		_ = os.MkdirAll(uploadDir, 0755)
 	}
@@ -37,13 +38,37 @@ func (s *localStorage) SaveFile(file *multipart.FileHeader) (string, error) {
 	}
 	defer src.Close()
 
-	// Generate unique filename
-	ext := filepath.Ext(file.Filename)
-	filename := fmt.Sprintf("%d-%s%s", time.Now().UnixNano(), strings.ReplaceAll(filepath.Base(file.Filename), ext, ""), ext)
+	// Generate 8 random hex chars to make filename completely secure
+	randBytes := make([]byte, 4)
+	if _, err := rand.Read(randBytes); err != nil {
+		return "", err
+	}
+	randHex := hex.EncodeToString(randBytes)
+
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	// Restrict to safe formats
+	allowedExts := map[string]bool{
+		".jpg": true, ".jpeg": true, ".png": true, ".webp": true,
+		".mp4": true, ".mov": true, ".avi": true, ".mkv": true,
+		".mp3": true, ".wav": true, ".ogg": true, ".aac": true,
+		".srt": true, ".vtt": true,
+	}
+	if !allowedExts[ext] {
+		return "", fmt.Errorf("unsupported file extension: %s", ext)
+	}
+
+	filename := fmt.Sprintf("%d-%s%s", time.Now().UnixNano(), randHex, ext)
 	relativePath := filepath.Join("uploads", filename)
 	destPath := filepath.Join(s.uploadDir, filename)
 
-	out, err := os.Create(destPath)
+	// Ensure destination remains inside upload directory (path traversal check)
+	cleanUploadDir := filepath.Clean(s.uploadDir)
+	cleanDestPath := filepath.Clean(destPath)
+	if !strings.HasPrefix(cleanDestPath, cleanUploadDir) {
+		return "", fmt.Errorf("path traversal attempt detected")
+	}
+
+	out, err := os.Create(cleanDestPath)
 	if err != nil {
 		return "", err
 	}
@@ -54,19 +79,25 @@ func (s *localStorage) SaveFile(file *multipart.FileHeader) (string, error) {
 		return "", err
 	}
 
-	// Return normalized relative path (e.g. "uploads/12345.jpg")
 	return filepath.ToSlash(relativePath), nil
 }
 
 func (s *localStorage) DeleteFile(path string) error {
-	// path is e.g. "uploads/12345.jpg". We need the filename
 	filename := filepath.Base(path)
 	fullPath := filepath.Join(s.uploadDir, filename)
-	return os.Remove(fullPath)
+
+	// Path traversal protection
+	cleanUploadDir := filepath.Clean(s.uploadDir)
+	cleanFullPath := filepath.Clean(fullPath)
+	if !strings.HasPrefix(cleanFullPath, cleanUploadDir) {
+		return fmt.Errorf("path traversal attempt detected")
+	}
+
+	return os.Remove(cleanFullPath)
 }
 
 func (s *localStorage) GetPublicURL(path string) string {
-	// Normalizes paths like "uploads/12345.jpg" to URL "http://app_url/uploads/12345.jpg"
 	cleanPath := filepath.ToSlash(path)
 	return fmt.Sprintf("%s/%s", strings.TrimSuffix(config.AppConfig.AppURL, "/"), cleanPath)
 }
+

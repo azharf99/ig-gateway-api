@@ -24,8 +24,12 @@ func NewServer(router *gin.Engine) *Server {
 
 func (s *Server) Run() {
 	srv := &http.Server{
-		Addr:    ":" + config.AppConfig.Port,
-		Handler: s.router,
+		Addr:           ":" + config.AppConfig.Port,
+		Handler:        s.router,
+		ReadTimeout:    15 * time.Second,
+		WriteTimeout:   30 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 1 << 20, // 1MB max header
 	}
 
 	go func() {

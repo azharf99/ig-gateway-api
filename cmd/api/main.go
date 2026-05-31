@@ -46,16 +46,17 @@ func main() {
 	postUC := post.NewPostUsecase(postRepo, userRepo, igClient, storageService)
 
 	// 7. Initialize Cron Scheduler
-	cronScheduler := scheduler.NewScheduler(postUC)
+	cronScheduler := scheduler.NewScheduler(postUC, authUC)
 	cronScheduler.Start()
 	defer cronScheduler.Stop()
 
 	// 8. Initialize HTTP Handlers (Delivery Layer)
 	authHandler := handlers.NewAuthHandler(authUC)
 	postHandler := handlers.NewPostHandler(postUC, storageService)
+	webhookHandler := handlers.NewWebhookHandler(userRepo)
 
 	// 9. Setup Router and Start Server
-	router := delivery.SetupRouter(authHandler, postHandler)
+	router := delivery.SetupRouter(authHandler, postHandler, webhookHandler)
 	server := delivery.NewServer(router)
 
 	server.Run()

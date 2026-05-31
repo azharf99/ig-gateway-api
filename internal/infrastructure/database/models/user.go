@@ -13,6 +13,7 @@ type User struct {
 	Password             string `gorm:"size:255;not null"`
 	InstagramAccountID   string `gorm:"size:255"`
 	InstagramAccessToken string `gorm:"type:text"`
+	OAuthState           string `gorm:"size:255"`
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }
@@ -26,6 +27,7 @@ func (u *User) ToEntity() *entities.User {
 		Password:             u.Password,
 		InstagramAccountID:   u.InstagramAccountID,
 		InstagramAccessToken: u.InstagramAccessToken,
+		OAuthState:           u.OAuthState,
 		CreatedAt:            u.CreatedAt,
 		UpdatedAt:            u.UpdatedAt,
 	}
@@ -39,6 +41,8 @@ func (u *User) FromEntity(e *entities.User) {
 	u.Password = e.Password
 	u.InstagramAccountID = e.InstagramAccountID
 	u.InstagramAccessToken = e.InstagramAccessToken
+	u.OAuthState = e.OAuthState
 	u.CreatedAt = e.CreatedAt
 	u.UpdatedAt = e.UpdatedAt
 }
+

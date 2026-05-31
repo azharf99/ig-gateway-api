@@ -10,4 +10,8 @@ type UserRepository interface {
 	GetByID(ctx context.Context, id uint) (*entities.User, error)
 	GetByEmail(ctx context.Context, email string) (*entities.User, error)
 	Update(ctx context.Context, user *entities.User) error
+	GetByInstagramID(ctx context.Context, instagramID string) (*entities.User, error)
+	DeleteByInstagramID(ctx context.Context, instagramID string) error
+	GetAllWithInstagramToken(ctx context.Context) ([]*entities.User, error)
 }
+
