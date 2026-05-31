@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,12 +33,6 @@ func NewLocalStorage(uploadDir string) StorageService {
 }
 
 func (s *localStorage) SaveFile(file *multipart.FileHeader) (string, error) {
-	src, err := file.Open()
-	if err != nil {
-		return "", err
-	}
-	defer src.Close()
-
 	// Generate 8 random hex chars to make filename completely secure
 	randBytes := make([]byte, 4)
 	if _, err := rand.Read(randBytes); err != nil {
@@ -46,6 +41,50 @@ func (s *localStorage) SaveFile(file *multipart.FileHeader) (string, error) {
 	randHex := hex.EncodeToString(randBytes)
 
 	ext := strings.ToLower(filepath.Ext(file.Filename))
+	
+	// Fallback detection for files without extension (e.g., blobs/temp files)
+	if ext == "" {
+		src, err := file.Open()
+		if err == nil {
+			buffer := make([]byte, 512)
+			n, err := src.Read(buffer)
+			src.Close()
+			if err == nil || err == io.EOF {
+				contentType := http.DetectContentType(buffer[:n])
+				if contentType == "application/octet-stream" {
+					contentType = file.Header.Get("Content-Type")
+				}
+
+				switch {
+				case strings.HasPrefix(contentType, "image/jpeg") || contentType == "image/jpg":
+					ext = ".jpg"
+				case strings.HasPrefix(contentType, "image/png"):
+					ext = ".png"
+				case strings.HasPrefix(contentType, "image/webp"):
+					ext = ".webp"
+				case strings.HasPrefix(contentType, "video/mp4"):
+					ext = ".mp4"
+				case strings.HasPrefix(contentType, "video/quicktime"):
+					ext = ".mov"
+				case strings.HasPrefix(contentType, "video/x-msvideo"):
+					ext = ".avi"
+				case strings.HasPrefix(contentType, "video/x-matroska"):
+					ext = ".mkv"
+				case strings.HasPrefix(contentType, "audio/mpeg") || contentType == "audio/mp3":
+					ext = ".mp3"
+				case strings.HasPrefix(contentType, "audio/wav"):
+					ext = ".wav"
+				case strings.HasPrefix(contentType, "audio/ogg"):
+					ext = ".ogg"
+				case strings.HasPrefix(contentType, "audio/aac"):
+					ext = ".aac"
+				case contentType == "text/plain" || strings.HasPrefix(contentType, "text/"):
+					ext = ".srt"
+				}
+			}
+		}
+	}
+
 	// Restrict to safe formats
 	allowedExts := map[string]bool{
 		".jpg": true, ".jpeg": true, ".png": true, ".webp": true,
@@ -61,12 +100,24 @@ func (s *localStorage) SaveFile(file *multipart.FileHeader) (string, error) {
 	relativePath := filepath.Join("uploads", filename)
 	destPath := filepath.Join(s.uploadDir, filename)
 
-	// Ensure destination remains inside upload directory (path traversal check)
-	cleanUploadDir := filepath.Clean(s.uploadDir)
-	cleanDestPath := filepath.Clean(destPath)
+	// Ensure destination remains inside upload directory (path traversal check using absolute paths)
+	cleanUploadDir, err := filepath.Abs(s.uploadDir)
+	if err != nil {
+		return "", err
+	}
+	cleanDestPath, err := filepath.Abs(destPath)
+	if err != nil {
+		return "", err
+	}
 	if !strings.HasPrefix(cleanDestPath, cleanUploadDir) {
 		return "", fmt.Errorf("path traversal attempt detected")
 	}
+
+	src, err := file.Open()
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
 
 	out, err := os.Create(cleanDestPath)
 	if err != nil {
@@ -86,9 +137,15 @@ func (s *localStorage) DeleteFile(path string) error {
 	filename := filepath.Base(path)
 	fullPath := filepath.Join(s.uploadDir, filename)
 
-	// Path traversal protection
-	cleanUploadDir := filepath.Clean(s.uploadDir)
-	cleanFullPath := filepath.Clean(fullPath)
+	// Path traversal protection using absolute paths
+	cleanUploadDir, err := filepath.Abs(s.uploadDir)
+	if err != nil {
+		return err
+	}
+	cleanFullPath, err := filepath.Abs(fullPath)
+	if err != nil {
+		return err
+	}
 	if !strings.HasPrefix(cleanFullPath, cleanUploadDir) {
 		return fmt.Errorf("path traversal attempt detected")
 	}
@@ -100,4 +157,5 @@ func (s *localStorage) GetPublicURL(path string) string {
 	cleanPath := filepath.ToSlash(path)
 	return fmt.Sprintf("%s/%s", strings.TrimSuffix(config.AppConfig.AppURL, "/"), cleanPath)
 }
+
 

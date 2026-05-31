@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
@@ -151,6 +152,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 
 		savedPath, err := h.storageServ.SaveFile(fileHeader)
 		if err != nil {
+			log.Printf("[ERROR] Failed to save media file: %v", err)
 			h.cleanupMediaList(mediaList)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save uploaded file"})
 			return
@@ -189,6 +191,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 
 		savedAudio, err := h.storageServ.SaveFile(audioHeader)
 		if err != nil {
+			log.Printf("[ERROR] Failed to save audio file: %v", err)
 			h.cleanupMediaList(mediaList)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save audio file"})
 			return
@@ -211,6 +214,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 
 		savedLogo, err := h.storageServ.SaveFile(logoHeader)
 		if err != nil {
+			log.Printf("[ERROR] Failed to save logo file: %v", err)
 			h.cleanupMediaList(mediaList)
 			if audioPath != "" {
 				_ = h.storageServ.DeleteFile(audioPath)
@@ -239,6 +243,7 @@ func (h *PostHandler) CreatePost(c *gin.Context) {
 
 		savedSubtitle, err := h.storageServ.SaveFile(subtitleHeader)
 		if err != nil {
+			log.Printf("[ERROR] Failed to save subtitle file: %v", err)
 			h.cleanupMediaList(mediaList)
 			if audioPath != "" {
 				_ = h.storageServ.DeleteFile(audioPath)
