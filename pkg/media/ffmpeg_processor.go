@@ -200,11 +200,25 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath, subtitleP
 	// 2. Overlay Text Hook
 	if meta.Text != "" {
 		wrappedText := wordWrap(meta.Text, 15) // word-wrap at ~15 characters
-		escapedText := escapeFFmpegText(wrappedText)
+		
+		// Create a temporary file for the text to avoid escaping and newline issues in ffmpeg
+		tmpFile, err := os.CreateTemp("", "ffmpeg_text_*.txt")
+		if err != nil {
+			return fmt.Errorf("failed to create temp file for text: %w", err)
+		}
+		defer os.Remove(tmpFile.Name())
+		
+		if _, err := tmpFile.WriteString(wrappedText); err != nil {
+			tmpFile.Close()
+			return fmt.Errorf("failed to write text to temp file: %w", err)
+		}
+		tmpFile.Close()
+
 		fontPath := getFontPath()
 		fontOption := ""
 		if fontPath != "" {
-			fontOption = fmt.Sprintf("fontfile='%s':", fontPath)
+			escapedFontPath := escapeFFmpegFilterPath(fontPath)
+			fontOption = fmt.Sprintf("fontfile='%s':", escapedFontPath)
 		}
 
 		var textStyleParams string
@@ -227,7 +241,8 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath, subtitleP
 			yPos = "(h-text_h)*3/4"
 		}
 
-		filterComplex = append(filterComplex, fmt.Sprintf("[%s]drawtext=%s%s:x=(w-text_w)/2:y=%s:text='%s'[text_overlay]", currentVideoVar, fontOption, textStyleParams, yPos, escapedText))
+		escapedTextfilePath := escapeFFmpegFilterPath(tmpFile.Name())
+		filterComplex = append(filterComplex, fmt.Sprintf("[%s]drawtext=%s%s:x=(w-text_w)/2:y=%s:textfile='%s'[text_overlay]", currentVideoVar, fontOption, textStyleParams, yPos, escapedTextfilePath))
 		currentVideoVar = "text_overlay"
 	}
 
