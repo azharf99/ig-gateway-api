@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -248,6 +249,28 @@ func ProcessVideo(ctx context.Context, videoPath, audioPath, logoPath, subtitleP
 
 	// 3. Burn-in Subtitles
 	if meta.HasSubtitles && subtitlePath != "" {
+		// Normalize subtitle file to fix missing blank lines between blocks which causes text concatenation
+		content, err := os.ReadFile(subtitlePath)
+		if err == nil {
+			text := string(content)
+			text = strings.ReplaceAll(text, "\r\n", "\n")
+			text = strings.ReplaceAll(text, "\r", "\n")
+
+			// Fix missing blank line before SRT block (Text \n Index \n Timestamp)
+			reSRT := regexp.MustCompile(`([^\n])\n(\d+)\n(\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->)`)
+			text = reSRT.ReplaceAllString(text, "$1\n\n$2\n$3")
+
+			// Fix missing blank line before VTT block (Text \n Timestamp)
+			reVTT := regexp.MustCompile(`([^\n])\n(\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->)`)
+			text = reVTT.ReplaceAllString(text, "$1\n\n$2")
+			
+			// Fix missing blank line before VTT short block (Text \n MM:SS.mmm)
+			reVTTShort := regexp.MustCompile(`([^\n])\n(\d{2}:\d{2}[,\.]\d{3}\s*-->)`)
+			text = reVTTShort.ReplaceAllString(text, "$1\n\n$2")
+
+			_ = os.WriteFile(subtitlePath, []byte(text), 0644)
+		}
+
 		escapedSubPath := escapeFFmpegFilterPath(subtitlePath)
 		filterComplex = append(filterComplex, fmt.Sprintf("[%s]subtitles='%s'[subtitles_overlay]", currentVideoVar, escapedSubPath))
 		currentVideoVar = "subtitles_overlay"
